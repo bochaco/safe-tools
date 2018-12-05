@@ -1,0 +1,26 @@
+{
+  "name": "safe-tools",
+  "description:": "",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "parcel src/index.html --port 1357",
+    "build": "parcel build src/index.html"
+  },
+  "dependencies": {
+    "antd": "^3.10.9",
+    "cids": "bochaco/js-cid#temp-use-bochaco-multicodec",
+    "react": "^16.6.3",
+    "react-dom": "^16.6.3"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.0.0-0",
+    "@babel/plugin-proposal-class-properties": "^7.1.0",
+    "@babel/preset-env": "^7.1.6",
+    "@babel/preset-react": "^7.0.0",
+    "babel-plugin-import": "^1.11.0",
+    "parcel-bundler": "^1.10.3",
+    "warning": "^4.0.2"
+  }
+}
