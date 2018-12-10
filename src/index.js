@@ -4,6 +4,8 @@ import { Alert, Tabs, message, Form, Row, List, Icon, Input, Button } from 'antd
 const { parse: parseUrl } = require('url');
 import multihash from 'multihashes';
 import CID from 'cids';
+import mime from 'mime';
+import nodePath from 'path';
 import styles from './global.css';
 import "@babel/polyfill";
 
@@ -14,6 +16,10 @@ const FormItem = Form.Item;
 
 const TYPE_TAG_DNS = 15001;
 const TYPE_TAG_WWW = 15002;
+const CID_VERSION = 1;
+const CID_BASE_ENCODING = 'base32z';
+const CID_HASH_FN = 'sha3-256';
+const CID_DEFAULT_CODEC = 'raw';
 const CID_MIME_CODEC_PREFIX = 'mime/';
 
 const REMAP_FIELDS = ['pubName', 'subName', 'url'];
@@ -144,11 +150,22 @@ class MainPanel extends React.Component {
             const emulation = resource.content.emulateAs(resource.resourceType);
             const file = await emulation.fetch(resource.parsedPath.replace(/^\//, ''));
             const filesize = await file.size();
+
+            // this is blocked by https://github.com/maidsafe/safe_client_libs/issues/711
+            const address = Buffer.from(file.dataMapName.buffer);
+            const encodedHash = multihash.encode(address, CID_HASH_FN);
+            const mimeType = mime.getType(nodePath.extname(resource.parsedPath));
+            const codec = mimeType ? `${CID_MIME_CODEC_PREFIX}${mimeType}` : CID_DEFAULT_CODEC;
+            const newCid = new CID(CID_VERSION, codec, encodedHash);
+            const cidStr = newCid.toBaseEncodedString(CID_BASE_ENCODING);
+            const fileXorUrl = `safe://${cidStr}`;
+
             decodedMsg = decodedMsg.concat([
               ['- File size', `${filesize} bytes`],
               ['- File\'s version', file.version],
               ['- File\'s XoR Name', `0x${file.dataMapName.buffer.toString('hex')}`],
               ['- File\'s XoR Name length', file.dataMapName.length],
+              ['- File\'s XOR-URL', fileXorUrl, true],
               ['- File\'s creation timestamp', file.created.toString()],
               ['- File\'s modification timestamp', file.modified.toString()],
               ['- File\'s user metadata', file.userMetadata.toString()],
