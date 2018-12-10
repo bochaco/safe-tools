@@ -22,6 +22,10 @@
   background: #fff;
 }
 
+#url2Decode {
+  width: 600px;
+}
+
 #pubName {
   width: 250px;
 }
@@ -34,6 +38,6 @@
   width: 600px;
 }
 
-#url2Decode {
-  width: 600px;
+#json {
+  width: 500px;
 }

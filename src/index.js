@@ -7,6 +7,8 @@ import CID from 'cids';
 import styles from './global.css';
 import "@babel/polyfill";
 
+const { TextArea } = Input;
+
 const TabPane = Tabs.TabPane;
 const FormItem = Form.Item;
 
@@ -16,6 +18,7 @@ const CID_MIME_CODEC_PREFIX = 'mime/';
 
 const REMAP_FIELDS = ['pubName', 'subName', 'url'];
 const DECODE_URL_FIELDS = ['url2Decode'];
+const JSON_2_MD_FIELDS = ['typeTag', 'json'];
 
 let safeApp = null;
 
@@ -66,11 +69,106 @@ class MainPanel extends React.Component {
   state = {
       remappedMsg: '',
       decodedMsg: '',
+      newMdMsg: '',
   }
 
   componentDidMount() {
     // To disabled submit button at the beginning.
     this.props.form.validateFields();
+  }
+
+  decodeUrl = async (url) =>
+  {
+    let decodedMsg = '';
+    try {
+      const parsedUrl = parseUrl(url);
+      if (!parsedUrl.protocol) throw Error('Invalid URL, it has no protocol');
+
+      const hostParts = parsedUrl.hostname.split('.');
+      const publicName = hostParts.pop(); // last one is 'publicName'
+      const subName = hostParts.join('.'); // all others are the 'subName'
+      console.log("Analysing URL:", url);
+
+      await authoriseApp()
+      const resource = await safeApp.fetch(url);
+
+      const type = {
+        'NFS' : 'NFS container',
+        'RDF' : 'RDF resource',
+        'MD'  : 'MutableData',
+        'IMMD': 'ImmutableData',
+      }[resource.resourceType] || 'UNKNOWN';
+
+      decodedMsg = [
+        ['Information about', url, true],
+        ['Targeted resource type', type]
+      ];
+
+      let justAPubNameUrl = false;
+      if (subName.length === 0) {
+        // this seems to be a XOR-URL
+        try {
+          const cid = new CID(publicName);
+          const encodedHash = multihash.decode(cid.multihash);
+          const address = encodedHash.digest;
+          const codec = cid.codec.replace(CID_MIME_CODEC_PREFIX, '');
+          decodedMsg = decodedMsg.concat([
+            ['Type tag', (parsedUrl.port || 'NONE')],
+            ['XoR Name', `0x${address.toString('hex')}`],
+            ['XoR Name length', encodedHash.length],
+            ['Encoded Content Type', (codec === 'raw' ? 'NONE' : codec)],
+            ['Hash type', encodedHash.name],
+            ['CID version', cid.version],
+          ]);
+        } catch (err) {
+          // it must be a publicName-URL then
+          justAPubNameUrl = true;
+        }
+      }
+
+      if (justAPubNameUrl) {
+        const nameAndTag = await resource.content.getNameAndTag();
+        decodedMsg = decodedMsg.concat([
+          ['Type tag', nameAndTag.typeTag],
+          ['XoR Name', `0x${nameAndTag.name.buffer.toString('hex')}`],
+          ['XoR Name length', nameAndTag.name.length],
+          ['XOR-URL', nameAndTag.xorUrl, true],
+        ]);
+      }
+
+      // if there is a path in the URL let's show info about the file
+      if (resource.parsedPath) {
+        decodedMsg.push(['URL path', resource.parsedPath]);
+        if (resource.resourceType === 'NFS') {
+          try {
+            const emulation = resource.content.emulateAs(resource.resourceType);
+            const file = await emulation.fetch(resource.parsedPath.replace(/^\//, ''));
+            const filesize = await file.size();
+            decodedMsg = decodedMsg.concat([
+              ['- File size', `${filesize} bytes`],
+              ['- File\'s version', file.version],
+              ['- File\'s XoR Name', `0x${file.dataMapName.buffer.toString('hex')}`],
+              ['- File\'s XoR Name length', file.dataMapName.length],
+              ['- File\'s creation timestamp', file.created.toString()],
+              ['- File\'s modification timestamp', file.modified.toString()],
+              ['- File\'s user metadata', file.userMetadata.toString()],
+            ]);
+          } catch (err) {
+            console.error("Failed to read file's info from URL path:", err);
+          }
+        }
+      }
+
+      this.props.form.setFieldsValue({
+        url2Decode: null,
+      });
+
+    } catch (err) {
+      console.error(err);
+      decodedMsg = `Failed to analyse '${url}': ${err.message}`;
+    }
+
+    this.setState({ decodedMsg });
   }
 
   remap = async (pubName, subName, url) => {
@@ -80,7 +178,7 @@ class MainPanel extends React.Component {
       console.log("TARGET RESOURCE TYPE:", resource.resourceType);
       const nameAndTag = await resource.content.getNameAndTag();
       let target = nameAndTag.name;
-      console.log("TYPE TAG:", nameAndTag.typeTag);
+      console.log("TARGET TYPE TAG:", nameAndTag.typeTag);
       if (nameAndTag.typeTag !== TYPE_TAG_WWW) {
           target = await resource.content.serialise();
       }
@@ -113,127 +211,38 @@ class MainPanel extends React.Component {
     }
   }
 
-  decodeUrl = async (url) =>
-  {
-    let decodedMsg = '';
-    try {
-      await authoriseApp()
-
-      const parsedUrl = parseUrl(url);
-      if (!parsedUrl.protocol) throw Error('Invalid XOR-URL');
-
-      const hostParts = parsedUrl.hostname.split('.');
-      const publicName = hostParts.pop(); // last one is 'publicName'
-      const subName = hostParts.join('.'); // all others are the 'subName'
-      console.log("DECODING:", url);
-
-      const resource = await safeApp.fetch(url);
-      console.log("TARGET RESOURCE TYPE:", resource.resourceType);
-
-      let type;
-      switch (resource.resourceType) {
-        case 'NFS':
-          type = 'NFS container';
-          break;
-        case 'RDF':
-          type = 'RDF resource';
-          break;
-        case 'MD':
-          type = 'MutableData';
-          break;
-        case 'IMMD':
-          type = 'ImmutableData';
-          break;
-        default:
-          type = 'UNKNOWN';
-      }
-
-      decodedMsg = [
-        ['Information about: ', url],
-        `Targeted resource type: ${type}`
+  json2Md = async (typeTag, json) => {
+    try{
+      await authoriseApp();
+      const parsedJson = JSON.parse(json);
+      const pubNameMd = await safeApp.mutableData.newRandomPublic(typeTag);
+      await pubNameMd.quickSetup(parsedJson);
+      const nameAndTag = await pubNameMd.getNameAndTag();
+      const newMdMsg = [
+        ['XOR-URL', nameAndTag.xorUrl, true],
+        ['Type tag', nameAndTag.typeTag],
+        ['XoR Name', `0x${nameAndTag.name.buffer.toString('hex')}`],
+        ['XoR Name length', nameAndTag.name.length],
+        ['JSON stored', JSON.stringify(parsedJson, null, 2)],
       ];
 
-      if (subName.length === 0) {
-        // this is effectively a XOR-URL
-        const cid = new CID(publicName);
-        console.log("CID VERSION:", cid.version);
-        console.log("CID ENCODING BASE: ?????");
-        const encodedHash = multihash.decode(cid.multihash);
-        const address = encodedHash.digest;
-        console.log("TYPE TAG:", parsedUrl.port);
-        console.log("XORNAME:", `0x${address.toString('hex')}`)
-        console.log("XORNAME length:", encodedHash.length);
-        console.log("HASH:", encodedHash.name);
-        const codec = cid.codec.replace(CID_MIME_CODEC_PREFIX, '');
-        console.log("ENCODED CONTENT TYPE:", codec);
-        decodedMsg = decodedMsg.concat([
-          `Type tag: ${parsedUrl.port || 'NONE'}`,
-          `XoR Name: 0x${address.toString('hex')}`,
-          `XoR Name length: ${encodedHash.length}`,
-          `Content type: ${codec === 'raw' ? 'NONE' : codec}`,
-          `Hash type: ${encodedHash.name}`,
-          `CID version: ${cid.version}`,
-        ]);
-      } else {
-        const nameAndTag = await resource.content.getNameAndTag();
-        console.log("TYPE TAG:", nameAndTag.typeTag);
-        console.log("XORNAME:", `0x${nameAndTag.name.buffer.toString('hex')}`);
-        console.log("XORNAME length:", nameAndTag.name.length);
-        console.log("XOR-URL:", nameAndTag.xorUrl);
-        decodedMsg = decodedMsg.concat([
-          `Type tag: ${nameAndTag.typeTag}`,
-          `XoR Name: 0x${nameAndTag.name.buffer.toString('hex')}`,
-          `XoR Name length: ${nameAndTag.name.length}`,
-          `XoR-URL: ${nameAndTag.xorUrl}`,
-        ]);
-      }
-
-      // if there is a path in the URL let's show info about the file
-      console.log("URL PATH:", resource.parsedPath);
-      if (resource.parsedPath) {
-        decodedMsg.push(`URL path: ${resource.parsedPath}`);
-        try {
-          if (resource.resourceType === 'NFS') {
-            const emulation = resource.content.emulateAs(resource.resourceType);
-            const file = await emulation.fetch(resource.parsedPath.replace(/^\//, ''));
-            const filesize = await file.size();
-            decodedMsg = decodedMsg.concat([
-              `File size: ${filesize} bytes`,
-              `File's version: ${file.version}`,
-              `File's XoR Name: 0x${file.dataMapName.buffer.toString('hex')}`,
-              `File's creation timestamp: ${file.created}`,
-              `File's modification timestamp: ${file.modified}`,
-              `File's user metadata: ${file.userMetadata.toString()}`,
-            ])
-          }
-        } catch (err) {
-          console.error("Failed to read file's info from URL path:", err);
-        }
-      }
+      this.setState( {
+        newMdMsg,
+        newMdResult: 'success',
+      });
 
       this.props.form.setFieldsValue({
-        url2Decode: null,
+        typeTag: null,
+        json: null,
       });
 
     } catch (err) {
       console.error(err);
-      decodedMsg = `Failed to decode '${url}': ${err.message}`;
+      this.setState( {
+        newMdMsg: `Failed to store JSON in a MutableData: ${err.message}`,
+        newMdResult: 'error',
+      });
     }
-
-    this.setState({ decodedMsg });
-  }
-
-  handleRemap = (e) => {
-    e.preventDefault();
-    this.props.form.validateFields(REMAP_FIELDS, (err, values) => {
-      if (!err) {
-        const values = this.props.form.getFieldsValue(REMAP_FIELDS);
-        console.log('Received values of form: ', values);
-        this.remap(values.pubName, values.subName, values.url);
-      } else {
-        console.error("ERROR:", err)
-      }
-    });
   }
 
   handleDecodeUrl = (e) => {
@@ -249,6 +258,32 @@ class MainPanel extends React.Component {
     });
   }
 
+  handleRemap = (e) => {
+    e.preventDefault();
+    this.props.form.validateFields(REMAP_FIELDS, (err, values) => {
+      if (!err) {
+        const values = this.props.form.getFieldsValue(REMAP_FIELDS);
+        console.log('Received values of form: ', values);
+        this.remap(values.pubName, values.subName, values.url);
+      } else {
+        console.error("ERROR:", err)
+      }
+    });
+  }
+
+  handleJson2Md = (e) => {
+    e.preventDefault();
+    this.props.form.validateFields(JSON_2_MD_FIELDS, (err, values) => {
+      if (!err) {
+        const values = this.props.form.getFieldsValue(JSON_2_MD_FIELDS);
+        console.log('Received values of form: ', values);
+        this.json2Md(parseInt(values.typeTag), values.json);
+      } else {
+        console.error("ERROR:", err)
+      }
+    });
+  }
+
   render() {
     const { getFieldDecorator, getFieldsError, getFieldError, isFieldTouched } = this.props.form;
 
@@ -257,11 +292,13 @@ class MainPanel extends React.Component {
     const subNameError = isFieldTouched('subName') && getFieldError('subName');
     const urlError = isFieldTouched('url') && getFieldError('url');
     const url2DecodeError = isFieldTouched('url2Decode') && getFieldError('url2Decode');
+    const typeTagError = isFieldTouched('typeTag') && getFieldError('typeTag');
+    const jsonError = isFieldTouched('json') && getFieldError('json');
 
     return (
       <div className={styles.cardContainer}>
         <Tabs type="card">
-          <TabPane tab="safe-URL Analyser" key="2">
+          <TabPane tab="safe-URL Analyser" key="1">
 
             <Form layout="inline" onSubmit={this.handleDecodeUrl}>
               <FormItem
@@ -288,16 +325,18 @@ class MainPanel extends React.Component {
             {Array.isArray(this.state.decodedMsg) ?
                 (<List style={{ margin: '20px' }}
                   split={false}
-                  header={
-                    <span><b>
-                      {this.state.decodedMsg[0][0]}
-                      <a href={this.state.decodedMsg[0][1]} target='_blank'>
-                        {this.state.decodedMsg[0][1]}
-                      </a>
-                    </b></span>
-                  }
-                  dataSource={this.state.decodedMsg.slice(1)}
-                  renderItem={item => (<List.Item>{item}</List.Item>)}
+                  dataSource={this.state.decodedMsg}
+                  renderItem={item => (
+                    <List.Item>
+                      <b>{item[0]}:&nbsp;</b>
+                      {item[2] ?
+                        <a href={item[1]} target='_blank'>
+                          {item[1]}
+                        </a>
+                        : item[1]
+                      }
+                    </List.Item>
+                  )}
                 />)
               : this.state.decodedMsg &&
                 <Alert
@@ -308,7 +347,7 @@ class MainPanel extends React.Component {
             }
 
           </TabPane>
-          <TabPane tab="Remap a subName" key="1">
+          <TabPane tab="Remap a subName" key="2">
 
             <Form layout="inline" onSubmit={this.handleRemap}>
               <Row>
@@ -364,6 +403,69 @@ class MainPanel extends React.Component {
                 type={this.state.remappedResult}
               />
               : null
+            }
+
+          </TabPane>
+          <TabPane tab="JSON to MutableData" key="3">
+
+            <Form layout="inline" onSubmit={this.handleJson2Md}>
+              <Row>
+                <FormItem
+                  validateStatus={jsonError ? 'error' : ''}
+                  help={jsonError || ''}
+                >
+                  {getFieldDecorator('json', {
+                    rules: [{ required: true, message: 'Please enter the JSON!' }],
+                  })(
+                    <TextArea rows={7} placeholder="JSON" />
+                  )}
+                </FormItem>
+              </Row>
+              <Row>
+                <FormItem
+                  validateStatus={typeTagError ? 'error' : ''}
+                  help={typeTagError || ''}
+                >
+                  {getFieldDecorator('typeTag', {
+                    rules: [{ required: true, pattern: '^[0-9]+$', message: 'Please enter a number for the Type Tag!' }],
+                  })(
+                    <Input placeholder="Type Tag number" />
+                  )}
+                </FormItem>
+                <FormItem>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    disabled={hasErrors(getFieldsError(JSON_2_MD_FIELDS))}
+                  >
+                    Create MutableData
+                  </Button>
+                </FormItem>
+              </Row>
+            </Form>
+            <br/>
+            {Array.isArray(this.state.newMdMsg) ?
+                (<List style={{ margin: '20px' }}
+                  split={false}
+                  dataSource={this.state.newMdMsg}
+                  renderItem={item => (
+                    <List.Item>
+                      <b>{item[0]}:&nbsp;</b>
+                      {item[2] ?
+                        <a href={item[1]} target='_blank'>
+                          {item[1]}
+                        </a>
+                        : item[1]
+                      }
+                    </List.Item>
+                  )}
+                />)
+              : this.state.newMdMsg &&
+                <Alert
+                  closable
+                  message={this.state.newMdMsg}
+                  type="error"
+                />
             }
 
           </TabPane>
