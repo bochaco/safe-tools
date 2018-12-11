@@ -52,7 +52,7 @@ const reqSharedMd = async (nameAndTag) =>
       const sharedMdReqUri = await safeApp.auth.genShareMDataUri([ {
         typeTag: nameAndTag.typeTag,
         name: nameAndTag.name,
-        perms: ['Update'],
+        perms: ['Insert', 'Update'],
       } ]);
       const connUri = await window.safe.authorise( sharedMdReqUri );
       await safeApp.auth.loginFromUri( connUri );
@@ -104,8 +104,8 @@ class MainPanel extends React.Component {
         ['Targeted resource type', type]
       ];
 
-      let justAPubNameUrl = false;
-      if (subName.length === 0) {
+      let justAPubNameUrl = (subName.length > 0);
+      if (!justAPubNameUrl) {
         // this seems to be a XOR-URL
         try {
           const cid = new CID(publicName);
@@ -188,8 +188,17 @@ class MainPanel extends React.Component {
       const pubNameMdNameAndTag = await pubNameMd.getNameAndTag();
       await reqSharedMd(pubNameMdNameAndTag); // request permissions to mutation subName entry
       const mut = await safeApp.mutableData.newMutation();
-      const current = await pubNameMd.get(subName);
-      await mut.update(subName, target, current.version + 1);
+      try {
+        // if the subName doesn't exist we'll insert it
+        const current = await pubNameMd.get(subName);
+        await mut.update(subName, target, current.version + 1);
+      } catch(err) {
+        // error -106 is Core error: Routing client error -> Requested entry not found
+        if (err.code !== -106) {
+          throw err;
+        }
+        await mut.insert(subName, target);
+      }
       await pubNameMd.applyEntriesMutation(mut);
       this.setState( {
         remappedMsg: `Successfully remapped 'safe://${subName}.${pubName}' to same location targetted by '${url}'`,
@@ -358,7 +367,7 @@ class MainPanel extends React.Component {
                   {getFieldDecorator('pubName', {
                     rules: [{ required: true, message: 'Please enter the publicName!' }],
                   })(
-                    <Input placeholder="PublicName" />
+                    <Input placeholder="Existing PublicName" />
                   )}
                 </FormItem>
                 <FormItem
@@ -368,7 +377,7 @@ class MainPanel extends React.Component {
                   {getFieldDecorator('subName', {
                     rules: [{ required: true, message: 'Please enter the SubName to remap!' }],
                   })(
-                    <Input placeholder="SubName" />
+                    <Input placeholder="Existing or new SubName" />
                   )}
                 </FormItem>
               </Row>
