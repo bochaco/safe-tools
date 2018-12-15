@@ -337,7 +337,7 @@ class MainPanel extends React.Component {
                   dataSource={this.state.decodedMsg}
                   renderItem={item => (
                     <List.Item>
-                      <b>{item[0]}:&nbsp;</b>
+                      <b><span style={{ paddingRight: '1em' }}>{item[0]}:</span></b>
                       {item[2] ?
                         <a href={item[1]} target='_blank'>
                           {item[1]}
@@ -459,7 +459,7 @@ class MainPanel extends React.Component {
                   dataSource={this.state.newMdMsg}
                   renderItem={item => (
                     <List.Item>
-                      <b>{item[0]}:&nbsp;</b>
+                      <b><span style={{ paddingRight: '1em' }}>{item[0]}:</span></b>
                       {item[2] ?
                         <a href={item[1]} target='_blank'>
                           {item[1]}
