@@ -19,6 +19,7 @@ const CID_MIME_CODEC_PREFIX = 'mime/';
 const REMAP_FIELDS = ['pubName', 'subName', 'url'];
 const DECODE_URL_FIELDS = ['url2Decode'];
 const JSON_2_MD_FIELDS = ['typeTag', 'json'];
+const GEN_XOR_URL_FIELDS = ['typeTag4Gen', 'xorName'];
 
 let safeApp = null;
 
@@ -70,6 +71,7 @@ class MainPanel extends React.Component {
       remappedMsg: '',
       decodedMsg: '',
       newMdMsg: '',
+      genXorUrlMsg: '',
   }
 
   componentDidMount() {
@@ -172,7 +174,7 @@ class MainPanel extends React.Component {
   }
 
   remap = async (pubName, subName, url) => {
-    try{
+    try {
       await authoriseApp();
       const resource = await safeApp.fetch(url);
       console.log("TARGET RESOURCE TYPE:", resource.resourceType);
@@ -221,7 +223,7 @@ class MainPanel extends React.Component {
   }
 
   json2Md = async (typeTag, json) => {
-    try{
+    try {
       await authoriseApp();
       const parsedJson = JSON.parse(json);
       const pubNameMd = await safeApp.mutableData.newRandomPublic(typeTag);
@@ -250,6 +252,37 @@ class MainPanel extends React.Component {
       this.setState( {
         newMdMsg: `Failed to store JSON in a MutableData: ${err.message}`,
         newMdResult: 'error',
+      });
+    }
+  }
+
+  genXorUrl = async (typeTag, xorName) => {
+    try{
+      await authoriseApp();
+      const md = await safeApp.mutableData.newPublic(new Buffer(xorName, 'hex'), typeTag);
+      const nameAndTag = await md.getNameAndTag();
+      const genXorUrlMsg = [
+        ['XOR-URL', nameAndTag.xorUrl, true],
+        ['Type tag', nameAndTag.typeTag],
+        ['XoR Name', `0x${nameAndTag.name.buffer.toString('hex')}`],
+        ['XoR Name length', nameAndTag.name.length],
+      ];
+
+      this.setState( {
+        genXorUrlMsg,
+        genXorUrlResult: 'success',
+      });
+
+      this.props.form.setFieldsValue({
+        typeTag4Gen: null,
+        xorName: null,
+      });
+
+    } catch (err) {
+      console.error(err);
+      this.setState( {
+        genXorUrlMsg: `Failed to generate XOR-URL: ${err.message}`,
+        genXorUrlResult: 'error',
       });
     }
   }
@@ -293,6 +326,19 @@ class MainPanel extends React.Component {
     });
   }
 
+  handleGenXorUrl = (e) => {
+    e.preventDefault();
+    this.props.form.validateFields(GEN_XOR_URL_FIELDS, (err, values) => {
+      if (!err) {
+        const values = this.props.form.getFieldsValue(GEN_XOR_URL_FIELDS);
+        console.log('Received values of form: ', values);
+        this.genXorUrl(parseInt(values.typeTag4Gen), values.xorName);
+      } else {
+        console.error("ERROR:", err)
+      }
+    });
+  }
+
   render() {
     const { getFieldDecorator, getFieldsError, getFieldError, isFieldTouched } = this.props.form;
 
@@ -303,6 +349,8 @@ class MainPanel extends React.Component {
     const url2DecodeError = isFieldTouched('url2Decode') && getFieldError('url2Decode');
     const typeTagError = isFieldTouched('typeTag') && getFieldError('typeTag');
     const jsonError = isFieldTouched('json') && getFieldError('json');
+    const xorNameError = isFieldTouched('xorName') && getFieldError('xorName');
+    const typeTag4GenError = isFieldTouched('typeTag4Gen') && getFieldError('typeTag4Gen');
 
     return (
       <div className={styles.cardContainer}>
@@ -473,6 +521,69 @@ class MainPanel extends React.Component {
                 <Alert
                   closable
                   message={this.state.newMdMsg}
+                  type="error"
+                />
+            }
+
+          </TabPane>
+          <TabPane tab="Generate MD XOR-URL" key="4">
+
+            <Form layout="inline" onSubmit={this.handleGenXorUrl}>
+              <Row>
+                <FormItem
+                  validateStatus={xorNameError ? 'error' : ''}
+                  help={xorNameError || ''}
+                >
+                  {getFieldDecorator('xorName', {
+                    rules: [{ required: true, message: 'Please enter a MutableData XoR name!' }],
+                  })(
+                    <Input placeholder="MutableData XoR name (in hex)" />
+                  )}
+                </FormItem>
+              </Row>
+              <Row>
+                <FormItem
+                  validateStatus={typeTag4GenError ? 'error' : ''}
+                  help={typeTag4GenError || ''}
+                >
+                  {getFieldDecorator('typeTag4Gen', {
+                    rules: [{ required: true, pattern: '^[0-9]+$', message: 'Please enter a number for the Type Tag!' }],
+                  })(
+                    <Input placeholder="Type Tag number" />
+                  )}
+                </FormItem>
+                <FormItem>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    disabled={hasErrors(getFieldsError(GEN_XOR_URL_FIELDS))}
+                  >
+                    Generate MD XOR-URL
+                  </Button>
+                </FormItem>
+              </Row>
+            </Form>
+            <br/>
+            {Array.isArray(this.state.genXorUrlMsg) ?
+                (<List style={{ margin: '20px' }}
+                  split={false}
+                  dataSource={this.state.genXorUrlMsg}
+                  renderItem={item => (
+                    <List.Item>
+                      <b><span style={{ paddingRight: '1em' }}>{item[0]}:</span></b>
+                      {item[2] ?
+                        <a href={item[1]} target='_blank'>
+                          {item[1]}
+                        </a>
+                        : item[1]
+                      }
+                    </List.Item>
+                  )}
+                />)
+              : this.state.genXorUrlMsg &&
+                <Alert
+                  closable
+                  message={this.state.genXorUrlMsg}
                   type="error"
                 />
             }
