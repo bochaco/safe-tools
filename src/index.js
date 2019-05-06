@@ -20,6 +20,7 @@ const REMAP_FIELDS = ['pubName', 'subName', 'url'];
 const DECODE_URL_FIELDS = ['url2Decode'];
 const JSON_2_MD_FIELDS = ['typeTag', 'json'];
 const GEN_XOR_URL_FIELDS = ['typeTag4Gen', 'xorName'];
+const GEN_IMMD_XOR_URL_FIELDS = ['mimeType4Gen', 'immdXorName'];
 
 let safeApp = null;
 
@@ -72,6 +73,7 @@ class MainPanel extends React.Component {
       decodedMsg: '',
       newMdMsg: '',
       genXorUrlMsg: '',
+      genImmdXorUrlMsg: '',
   }
 
   componentDidMount() {
@@ -83,6 +85,8 @@ class MainPanel extends React.Component {
   {
     let decodedMsg = '';
     try {
+      // replace any protocol with safe://
+      url = `safe://${url.replace(/^.*:\/\//g, '')}`;
       const parsedUrl = parseUrl(url);
       if (!parsedUrl.protocol) throw Error('Invalid URL, it has no protocol');
 
@@ -91,15 +95,21 @@ class MainPanel extends React.Component {
       const subName = hostParts.join('.'); // all others are the 'subName'
       console.log("Analysing URL:", url);
 
-      await authoriseApp()
-      const resource = await safeApp.fetch(url);
+      await authoriseApp();
+      let resource;
+      try {
+        resource = await safeApp.fetch(url);
+        console.log("Resource found:", resource);
+      } catch (err) {
+        console.warn("Only the URL string will be decoded.",err);
+      }
 
       const type = {
         'NFS' : 'NFS container',
         'RDF' : 'RDF resource',
         'MD'  : 'MutableData',
         'IMMD': 'ImmutableData',
-      }[resource.resourceType] || 'UNKNOWN';
+      }[resource && resource.resourceType] || 'UNKNOWN';
 
       decodedMsg = [
         ['Information about', url, true],
@@ -128,7 +138,7 @@ class MainPanel extends React.Component {
         }
       }
 
-      if (justAPubNameUrl) {
+      if (resource && justAPubNameUrl) {
         const nameAndTag = await resource.content.getNameAndTag();
         decodedMsg = decodedMsg.concat([
           ['Type tag', nameAndTag.typeTag],
@@ -139,7 +149,7 @@ class MainPanel extends React.Component {
       }
 
       // if there is a path in the URL let's show info about the file
-      if (resource.parsedPath) {
+      if (resource && resource.parsedPath) {
         decodedMsg.push(['URL path', resource.parsedPath]);
         if (resource.resourceType === 'NFS') {
           try {
@@ -256,7 +266,7 @@ class MainPanel extends React.Component {
     }
   }
 
-  genXorUrl = async (typeTag, xorName) => {
+  genMdXorUrl = async (typeTag, xorName) => {
     try{
       await authoriseApp();
       const md = await safeApp.mutableData.newPublic(new Buffer(xorName, 'hex'), typeTag);
@@ -281,8 +291,39 @@ class MainPanel extends React.Component {
     } catch (err) {
       console.error(err);
       this.setState( {
-        genXorUrlMsg: `Failed to generate XOR-URL: ${err.message}`,
+        genXorUrlMsg: `Failed to generate MD XOR-URL: ${err.message}`,
         genXorUrlResult: 'error',
+      });
+    }
+  }
+
+  genImmdXorUrl = async (xorName, mimeType) => {
+    try{
+      await authoriseApp();
+      const iDataReader = await safeApp.immutableData.fetch(new Buffer(xorName, 'hex'));
+      const xorUrl = await iDataReader.getXorUrl(mimeType);
+      const genImmdXorUrlMsg = [
+        ['XOR-URL', xorUrl, true],
+        ['Content type', mimeType],
+        ['XoR Name', `0x${xorName}`],
+        ['XoR Name length', xorName.length],
+      ];
+
+      this.setState( {
+        genImmdXorUrlMsg,
+        genImmdXorUrlResult: 'success',
+      });
+
+      this.props.form.setFieldsValue({
+        mimeType4Gen: null,
+        immdXorName: null,
+      });
+
+    } catch (err) {
+      console.error(err);
+      this.setState( {
+        genImmdXorUrlMsg: `Failed to generate ImmD XOR-URL: ${err.message}`,
+        genImmdXorUrlResult: 'error',
       });
     }
   }
@@ -326,13 +367,27 @@ class MainPanel extends React.Component {
     });
   }
 
-  handleGenXorUrl = (e) => {
+  handleGenMdXorUrl = (e) => {
     e.preventDefault();
     this.props.form.validateFields(GEN_XOR_URL_FIELDS, (err, values) => {
       if (!err) {
         const values = this.props.form.getFieldsValue(GEN_XOR_URL_FIELDS);
         console.log('Received values of form: ', values);
-        this.genXorUrl(parseInt(values.typeTag4Gen), values.xorName);
+        let typeTag = parseInt(values.typeTag4Gen);
+        this.genMdXorUrl(typeTag, values.xorName);
+      } else {
+        console.error("ERROR:", err)
+      }
+    });
+  }
+
+  handleGenImmdXorUrl = (e) => {
+    e.preventDefault();
+    this.props.form.validateFields(GEN_IMMD_XOR_URL_FIELDS, (err, values) => {
+      if (!err) {
+        const values = this.props.form.getFieldsValue(GEN_IMMD_XOR_URL_FIELDS);
+        console.log('Received values of form: ', values);
+        this.genImmdXorUrl(values.immdXorName, values.mimeType4Gen);
       } else {
         console.error("ERROR:", err)
       }
@@ -351,6 +406,8 @@ class MainPanel extends React.Component {
     const jsonError = isFieldTouched('json') && getFieldError('json');
     const xorNameError = isFieldTouched('xorName') && getFieldError('xorName');
     const typeTag4GenError = isFieldTouched('typeTag4Gen') && getFieldError('typeTag4Gen');
+    const immdXorNameError = isFieldTouched('immdXorName') && getFieldError('immdXorName');
+    const mimeType4GenError = isFieldTouched('mimeType4Gen') && getFieldError('mimeType4Gen');
 
     return (
       <div className={styles.cardContainer}>
@@ -528,7 +585,7 @@ class MainPanel extends React.Component {
           </TabPane>
           <TabPane tab="Generate MD XOR-URL" key="4">
 
-            <Form layout="inline" onSubmit={this.handleGenXorUrl}>
+            <Form layout="inline" onSubmit={this.handleGenMdXorUrl}>
               <Row>
                 <FormItem
                   validateStatus={xorNameError ? 'error' : ''}
@@ -589,6 +646,71 @@ class MainPanel extends React.Component {
             }
 
           </TabPane>
+
+          <TabPane tab="Generate ImmD XOR-URL" key="5">
+
+            <Form layout="inline" onSubmit={this.handleGenImmdXorUrl}>
+              <Row>
+                <FormItem
+                  validateStatus={immdXorNameError ? 'error' : ''}
+                  help={immdXorNameError || ''}
+                >
+                  {getFieldDecorator('immdXorName', {
+                    rules: [{ required: true, message: 'Please enter an ImmutableData XoR name!' }],
+                  })(
+                    <Input placeholder="ImmutableData XoR name (in hex)" />
+                  )}
+                </FormItem>
+              </Row>
+              <Row>
+                <FormItem
+                  validateStatus={mimeType4GenError ? 'error' : ''}
+                  help={mimeType4GenError || ''}
+                >
+                  {getFieldDecorator('mimeType4Gen', {
+                    rules: [{ required: false, message: '(optional) Enter a mime type' }],
+                  })(
+                    <Input placeholder="(optional) Mime-Type" />
+                  )}
+                </FormItem>
+                <FormItem>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    disabled={hasErrors(getFieldsError(GEN_IMMD_XOR_URL_FIELDS))}
+                  >
+                    Generate ImmD XOR-URL
+                  </Button>
+                </FormItem>
+              </Row>
+            </Form>
+            <br/>
+            {Array.isArray(this.state.genImmdXorUrlMsg) ?
+                (<List style={{ margin: '20px' }}
+                  split={false}
+                  dataSource={this.state.genImmdXorUrlMsg}
+                  renderItem={item => (
+                    <List.Item>
+                      <b><span style={{ paddingRight: '1em' }}>{item[0]}:</span></b>
+                      {item[2] ?
+                        <a href={item[1]} target='_blank'>
+                          {item[1]}
+                        </a>
+                        : item[1]
+                      }
+                    </List.Item>
+                  )}
+                />)
+              : this.state.genImmdXorUrlMsg &&
+                <Alert
+                  closable
+                  message={this.state.genImmdXorUrlMsg}
+                  type="error"
+                />
+            }
+
+          </TabPane>
+
         </Tabs>
       </div>
     );
