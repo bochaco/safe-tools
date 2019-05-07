@@ -300,13 +300,14 @@ class MainPanel extends React.Component {
   genImmdXorUrl = async (xorName, mimeType) => {
     try{
       await authoriseApp();
-      const iDataReader = await safeApp.immutableData.fetch(new Buffer(xorName, 'hex'));
+      const xorNameBuf = new Buffer(xorName, 'hex');
+      const iDataReader = await safeApp.immutableData.fetch(xorNameBuf);
       const xorUrl = await iDataReader.getXorUrl(mimeType);
       const genImmdXorUrlMsg = [
         ['XOR-URL', xorUrl, true],
         ['Content type', mimeType],
         ['XoR Name', `0x${xorName}`],
-        ['XoR Name length', xorName.length],
+        ['XoR Name length', xorNameBuf.length],
       ];
 
       this.setState( {
